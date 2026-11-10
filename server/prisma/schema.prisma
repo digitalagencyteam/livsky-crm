@@ -1,0 +1,287 @@
+// LIVSKY CRM — база админки агентства.
+//
+// Разделы: бухгалтерия (перенесена с «Доски клиентов» KOMETA CRM без изменений
+// логики), договоры (PDF + поиск по тексту, логика «Архива»), заявки с сайта и
+// контент сайта (статьи и кейсы). Пользователь один — админ.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  admin
+}
+
+model User {
+  id                 String    @id @default(cuid())
+  name               String    @default("")
+  email              String    @unique
+  passwordHash       String
+  role               Role      @default(admin)
+  active             Boolean   @default(true)
+  // Базовый пароль из сида: после первого входа CRM попросит его сменить.
+  mustChangePassword Boolean   @default(true)
+
+  resetCodeHash      String?
+  resetCodeExpires   DateTime?
+
+  boardClients       BoardClient[] @relation("BoardClientAddedBy")
+
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+// Справочник клиентов: один на всю CRM — бухгалтерия, договоры, заявки.
+model Client {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  createdAt DateTime   @default(now())
+
+  board     BoardClient?
+  contracts Contract[]
+}
+
+// ============================================================================
+// Бухгалтерия. Услуга относится к конкретному месяцу, деньги — в центах.
+// ============================================================================
+
+enum BoardClientStatus {
+  active
+  left
+}
+
+model BoardClient {
+  id        String            @id @default(cuid())
+  clientId  String            @unique
+  client    Client            @relation(fields: [clientId], references: [id])
+  contact   String?
+  status    BoardClientStatus @default(active)
+  startedAt DateTime
+  leftAt    DateTime?
+  leftReason String?
+  addedById String
+  addedBy   User              @relation("BoardClientAddedBy", fields: [addedById], references: [id])
+  services  BoardService[]
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+
+  @@index([status])
+}
+
+model BoardService {
+  id            String         @id @default(cuid())
+  boardClientId String
+  boardClient   BoardClient    @relation(fields: [boardClientId], references: [id], onDelete: Cascade)
+  title         String
+  month         DateTime
+  paidAt        DateTime?
+  workFrom      DateTime?
+  workTo        DateTime?
+  revenueCents  Int
+  expenses      BoardExpense[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+
+  @@index([boardClientId, month])
+  @@index([month])
+}
+
+model BoardExpense {
+  id          String       @id @default(cuid())
+  serviceId   String
+  service     BoardService @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  title       String
+  amountCents Int
+  paid        Boolean      @default(false)
+  paidAt      DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([serviceId])
+}
+
+// ============================================================================
+// Договоры: с клиентами и с сотрудниками. Файлы — PDF в хранилище, текст из
+// них вытаскивается при загрузке и нужен только для поиска.
+// ============================================================================
+
+enum ContractKind {
+  client
+  employee
+}
+
+enum ContractStatus {
+  draft      // черновик
+  sent       // отправлен на подпись
+  signed     // подписан
+  terminated // расторгнут / закрыт
+}
+
+model Contract {
+  id          String         @id @default(cuid())
+  kind        ContractKind
+  // Клиентский договор привязан к справочнику клиентов (для бухгалтерии),
+  // у сотрудника — просто ФИО.
+  clientId    String?
+  client      Client?        @relation(fields: [clientId], references: [id])
+  party       String
+  // Должность сотрудника или предмет договора с клиентом
+  subject     String         @default("")
+  number      String         @default("")
+  status      ContractStatus @default(draft)
+  signedAt    DateTime?
+  startsAt    DateTime?
+  endsAt      DateTime?
+  amountCents Int?
+  notes       String         @default("")
+  files       ContractFile[]
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([kind, status])
+  @@index([clientId])
+}
+
+enum ContractFileKind {
+  original // проект договора
+  signed   // подписанный скан
+  appendix // приложение, допсоглашение
+}
+
+model ContractFile {
+  id          String           @id @default(cuid())
+  contractId  String
+  contract    Contract         @relation(fields: [contractId], references: [id], onDelete: Cascade)
+  kind        ContractFileKind @default(original)
+  fileKey     String           @unique
+  fileName    String
+  fileSize    Int
+  textContent String?
+  createdAt   DateTime         @default(now())
+
+  @@index([contractId])
+}
+
+// ============================================================================
+// Заявки с сайта: форма и бронь звонка.
+// ============================================================================
+
+enum LeadKind {
+  form
+  call
+}
+
+enum LeadStatus {
+  new
+  in_work
+  done
+  spam
+}
+
+model Lead {
+  id        String     @id @default(cuid())
+  kind      LeadKind
+  status    LeadStatus @default(new)
+  name      String
+  contact   String
+  message   String     @default("")
+  needs     String[]
+  // Для брони звонка: на когда и где созвониться
+  callAt    DateTime?
+  platform  String?
+  page      String?
+  locale    String?
+  note      String     @default("")
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([status, createdAt])
+}
+
+// ============================================================================
+// Контент сайта. Не переводимое — в самой записи, тексты — по языкам.
+// Нет перевода на английский — сайт показывает русский.
+// ============================================================================
+
+enum PublishStatus {
+  draft
+  published
+}
+
+model Media {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  url       String
+  kind      String   // image | video
+  mime      String
+  size      Int
+  width     Int?
+  height    Int?
+  createdAt DateTime @default(now())
+}
+
+model Post {
+  id           String            @id @default(cuid())
+  slug         String            @unique
+  status       PublishStatus     @default(draft)
+  topic        String
+  publishedAt  DateTime          @default(now())
+  // MediaAsset сайта: { kind, src, alt, width, height, poster? }
+  cover        Json?
+  bookCover    Json?
+  translations PostTranslation[]
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+}
+
+model PostTranslation {
+  id        String   @id @default(cuid())
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  locale    String
+  title     String
+  excerpt   String   @default("")
+  category  String   @default("")
+  author    Json     // { name, role }
+  takeaways String[]
+  // Текст как его вставили в редактор — из него собираются разделы
+  body      String
+  // Разделы в формате сайта (PostSection[]), пересобираются при сохранении
+  sections  Json
+  seoTitle       String @default("")
+  seoDescription String @default("")
+
+  @@unique([postId, locale])
+}
+
+model Case {
+  id           String            @id @default(cuid())
+  slug         String            @unique
+  status       PublishStatus     @default(draft)
+  // live | in-progress — статус проекта на сайте
+  projectStatus String           @default("live")
+  year         Int
+  serviceSlugs String[]
+  domain       String            @default("")
+  media        Json?
+  sortOrder    Int               @default(0)
+  translations CaseTranslation[]
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+}
+
+model CaseTranslation {
+  id      String @id @default(cuid())
+  caseId  String
+  case    Case   @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  locale  String
+  // Все тексты кейса по шаблону сайта (title, client, metric, details…)
+  data    Json
+
+  @@unique([caseId, locale])
+}

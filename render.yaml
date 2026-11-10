@@ -1,0 +1,56 @@
+# Render Blueprint: API CRM + PostgreSQL. Админку (web/) удобнее держать на Vercel — см. README.
+databases:
+  - name: livsky-crm-db
+    plan: basic-256mb
+    databaseName: livsky_crm
+
+services:
+  - type: web
+    name: livsky-crm-api
+    runtime: node
+    rootDir: server
+    plan: starter
+    buildCommand: npm ci && npx prisma generate && npx prisma migrate deploy
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        fromDatabase:
+          name: livsky-crm-db
+          property: connectionString
+      - key: JWT_ACCESS_SECRET
+        generateValue: true
+      - key: JWT_REFRESH_SECRET
+        generateValue: true
+      - key: SITE_HOOK_SECRET
+        generateValue: true
+      - key: CLIENT_URL
+        sync: false
+      - key: SITE_ORIGINS
+        sync: false
+      - key: PUBLIC_URL
+        sync: false
+      - key: SITE_HOOKS
+        sync: false
+      - key: SMTP_HOST
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "465"
+      - key: SMTP_USER
+        value: agencyworkemailone@gmail.com
+      - key: SMTP_PASS
+        sync: false
+      - key: NOTIFY_EMAIL
+        value: agencyworkemailone@gmail.com
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: R2_PUBLIC_URL
+        sync: false
